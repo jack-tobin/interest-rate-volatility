@@ -29,7 +29,15 @@ os.chdir(local_dir)
 from auth_quandl import authenticate_quandl
 quandl = authenticate_quandl(quandl)
 
-# load in rates data, scrub
+# make directory for plots
+if not os.path.exists('Plots'):
+    os.mkdir('Plots')
+    
+# empty list for plot paths for later combination into a PDF
+plot_fs = []
+
+# load in rates data, scrub ---------------------------------------------------
+
 def load_rates_data(refresh=False):
     if refresh:
         # load in data
@@ -39,10 +47,11 @@ def load_rates_data(refresh=False):
         with open('rates.pickle', 'wb') as f:
             pickle.dump(rates, f)
     else:
+        # open from pickle
         with open('rates.pickle', 'rb') as f:
             rates = pickle.load(f)
     
-    # drop 2M
+    # drop 2 month yield
     rates.drop('2 MO', axis=1, inplace=True)
     
     # convert column names to number of days. assumes 30/360
@@ -59,11 +68,11 @@ rates = data['data']
 labels = data['labels']
 label_vals = {k: v for k, v in zip(labels, rates.columns)}
 
-# plot latest curve
+# plot latest curve -----------------------------------------------------------
 
-def plot_latest_curve():
+def plot_latest_curve(rates_data):
     # subset latest data
-    yc = rates.iloc[-1, :].T
+    yc = rates_data.iloc[-1, :].T
     
     # configure plot
     fig, ax = plt.subplots(1)
@@ -71,12 +80,18 @@ def plot_latest_curve():
     ax.yaxis.set_major_formatter(mtick.PercentFormatter())
     ax.set_xticks(yc.index)
     ax.set_xticklabels(labels)
-    plt.gcf().savefig('latest_curve.png', dpi=600)
-    plt.clf()
     
-plot_latest_curve()
+    # save, close
+    f = 'Plots/latest_curve.png'
+    plt.gcf().savefig(f, dpi=600)
+    plt.close()
+    
+    return f
+    
+f = plot_latest_curve(rates)
+plot_fs.append(f)
 
-# surface plot of curve over time
+# surface plot of curve over time ---------------------------------------------
 
 def arrange_data(df):
     # arrange into three dimensions
@@ -87,9 +102,9 @@ def arrange_data(df):
     
     return X, Y, Z
 
-def yc_surface():
+def yc_surface(rates_data, start_dt, data_labels):
     # subset data
-    rates_sub = rates[rates.index >= dt.datetime(2006, 2, 9)].copy()
+    rates_sub = rates_data[rates_data.index >= start_dt].copy()
     rates_sub.fillna(method='pad', inplace=True)
     X, Y, Z = arrange_data(rates_sub)
     
@@ -101,34 +116,42 @@ def yc_surface():
     # format axes
     ax.zaxis.set_major_formatter(mtick.PercentFormatter())
     ax.set_yticks(rates_sub.columns)
-    ax.set_yticklabels(labels)
+    ax.set_yticklabels(data_labels)
     ax.set_xticks(np.arange(0, 4000, 500))
     ax.set_xticklabels([format(x, '%Y') for x in rates_sub.index[np.arange(0, 4000, 500)]])
     
     # adjust plot scaling
     ax.get_proj = lambda: np.dot(Axes3D.get_proj(ax), np.diag([1.2, 0.7, 0.7, 1]))
     ax.view_init(elev=20, azim=-50)
-    plt.gcf().savefig('yc_surface.png', dpi=600)
-    plt.clf()
     
-yc_surface()
+    # save, close
+    f = 'Plots/yc_surface.png'
+    plt.gcf().savefig(f, dpi=600)
+    plt.close()
+    
+    return f
 
-# 10YT volatility analysis
+# run yield curve surface plot
+yc_date = dt.datetime(2006, 2, 9)
+f = yc_surface(rates, yc_date, labels)
+plot_fs.append(f)
 
-def vol_analysis(colname):
+# 10YT volatility plots -------------------------------------------------------
+
+def plot_yld_vol(rates_data, label_values, colname):
     # subset 10Y
-    df = pd.DataFrame(rates[label_vals[colname]].copy())
+    df = pd.DataFrame(rates_data[label_values[colname]].copy())
     df.columns = [colname]
     
     # additional data: changes in rates, decomposed daily return
     df['Diff'] = df[colname].diff()
-    df['LogDiff']= np.log(df[colname]).diff().mul(100)
+    df['LogDiff'] = np.log(df[colname]).diff() * 100
     df['Ret'] = df[colname].apply(lambda x: ((1 + x)**(1/360) - 1) * 100)
     df['Vol'] = df['Diff'].rolling(90).std()
     
-    # plot
+    # plot setup
     fig, axes = plt.subplots(3, figsize=(10,10))
-    
+
     # first plot--yield over time
     axes[0].plot(df[colname], label=colname + ' Yield')
     
@@ -139,53 +162,58 @@ def vol_analysis(colname):
     axes[2].plot(df['Vol'], label='Rolling 30D Rate Vol')
     
     # clean up
-    axes[0].yaxis.set_major_formatter(mtick.PercentFormatter())
-    axes[1].yaxis.set_major_formatter(mtick.PercentFormatter())
-    axes[2].yaxis.set_major_formatter(mtick.PercentFormatter())
+    [ax.yaxis.set_major_formatter(mtick.PercentFormatter()) for ax in axes]
     fig.subplots_adjust(bottom=0.05, top=0.95, left=0.05, right=0.95)
     [ax.legend() for ax in axes]
     
-    # save
-    plt.gcf().savefig(colname + '_stats.png', dpi=600)
-    plt.clf()
+    # save, close
+    f = 'Plots/' + colname + '_stats.png'
+    plt.gcf().savefig(f, dpi=600)
+    plt.close()
     
-    return df
+    return df, f
     
 # run vol analyses
-t3m = vol_analysis('3 MO')
-t2 = vol_analysis('2 YR')
-t10 = vol_analysis('10 YR')
-t30 = vol_analysis('30 YR')
+t3m, t3m_f = plot_yld_vol(rates, label_vals, '3 MO')
+t2, t2_f = plot_yld_vol(rates, label_vals, '2 YR')
+t10, t10_f = plot_yld_vol(rates, label_vals, '10 YR')
+t30, t30_f = plot_yld_vol(rates, label_vals, '30 YR')
+plot_fs.append(t3m_f)
+plot_fs.append(t2_f)
+plot_fs.append(t10_f)
+plot_fs.append(t30_f)
 
-# Hurst Exponent function
-# credit: https://goldinlocks.github.io/ARCH_GARCH-Volatility-Forecasting/
+# Hurst Exponent function -----------------------------------------------------
 
-def hurst(S):
+def hurst(X):
     """
-    Returns the Hurst Exponent of the series S
+    Returns the Hurst Exponent of the series X
+    credit: https://goldinlocks.github.io/ARCH_GARCH-Volatility-Forecasting/
     """
     
     # Create the range of lag values
     lags = range(2, 100)
     
     # Calculate the array of the variances of the lagged differences
-    tau = [np.sqrt(np.std(np.subtract(S[lag:], S[:-lag]))) for lag in lags]
+    tau = [np.sqrt(np.std(np.subtract(X[lag:], X[:-lag]))) for lag in lags]
     
     # Use a linear fit to estimate the Hurst Exponent
     poly = np.polyfit(np.log(lags), np.log(tau), 1)
     
     # Return the Hurst exponent from the polyfit output
-    return poly[0] * 2.0
+    return poly[0] * 2
 
 # run hurst coefficient
 hurst(t10['10 YR'].values)
 hurst(t10['Diff'].dropna().values)
 hurst(t10['LogDiff'].dropna().values)
 
-# hurst is close to 0, suggesting a mean reverting series. Nice!
+# ->>> hurst is close to 0, suggesting a mean reverting series. Nice!
 
-# make plot of diffs and serial correlation
+# make plot of diffs and serial correlation -----------------------------------
+
 def corr_plot(X, title):
+    # create subplots arrangement
     fig, axes = plt.subplots(2, figsize=(10,8))
     fig.suptitle(title)
     
@@ -197,105 +225,129 @@ def corr_plot(X, title):
     plot_acf(X, ax=axes[1], lags=100, zero=False)
     
     # save
-    plt.gcf().savefig(title + '.png', dpi=600)
-    plt.clf()
+    f = 'Plots/' + title + '.png'
+    plt.gcf().savefig(f, dpi=600)
+    plt.close()
+    
+    return f
 
-# generate autocorr plots
+# create standardized version of log diffs
 subset = t10['LogDiff'].dropna()
-standardized = subset.sub(subset.mean()).pow(2)
-corr_plot(subset, 'Log Diff Autocorr')
-corr_plot(standardized, 'Standardized Log Diff Autocorr')
+standardized = subset.sub(subset.mean()) ** 2
 
-# apply garch model to the time series to forecast volatility
+# make plots
+f_l = corr_plot(subset, 'Log Diff Autocorr')
+f_sl = corr_plot(standardized, 'Standardized Log Diff Autocorr')
+plot_fs.append(f_l)
+plot_fs.append(f_sl)
 
-# fit model
+# apply garch model to the time series to forecast volatility -----------------
+
+# fit model, use garch model with skew-t distribution and 'shock' approach
 X = t10['Diff'].dropna()
 gm = arch_model(X, p=1, o=1, q=1, mean='zero', vol='GARCH', dist='skewt')
 result = gm.fit(update_freq=0, disp='off')
-result.plot()
 result.summary()
 
-# plot distribution of residuals
+# generate plot and print summary to console
 
-# calculate standardized residuals
-gm_resid = result.resid
-gm_std = result.conditional_volatility
-gm_resid_st = gm_resid / gm_std
-
-# create plot
-fig, ax = plt.subplots(1, figsize=(10,7))
-sns.distplot(gm_resid_st, norm_hist=True, fit=stats.norm, bins=50, ax=ax)
-
-# evaluate fit by overlaying conditional vol over daily diffs
-fig, ax = plt.subplots(1)
-ax.plot(X, color='gray', label='Daily Yield Change', alpha=0.4)
-ax.plot(gm_std, color='darkred', label='Conditional Volatility')
-ax.legend()
-
-# plot conditional variance against rolling 30d variance
-X_roll_vol = X.rolling(30).std()
-fig, ax = plt.subplots(1)
-ax.plot(gm_std, color='darkred', label='Conditional Volatility')
-ax.plot(X_roll_vol, color='darkgreen', label='Actual Rolling 30D Volatility')
-ax.legend()
-
-# simulate forward returns
-
-clrs = sns.color_palette('deep')
-n_periods = 30
-
-def forecasting(n_days):
+def arch_plot(model_result):
+    # plot model, save
+    model_result.plot()
+    fig = plt.gcf()
+    fig.set_size_inches(10,8)
+    f = 'Plots/model_plot.png'
+    fig.savefig(f, dpi=600)
+    plt.close()
     
-    n_days = 30
+    return f
 
+f = arch_plot(result)
+plot_fs.append(f)
+
+# plot distribution of residuals ----------------------------------------------
+
+def plot_model_results(model_result, data):
+    # calculate standardized residuals
+    gm_resid = model_result.resid
+    gm_std = model_result.conditional_volatility
+    gm_resid_st = gm_resid / gm_std
+    
+    # create plot
+    fig, axes = plt.subplots(3, figsize=(10,12))
+    clrs = sns.color_palette('deep')
+    sns.distplot(gm_resid_st, norm_hist=True, fit=stats.norm, bins=50, ax=axes[0])
+    
+    # evaluate fit by overlaying conditional vol over daily diffs
+    axes[1].plot(data, color='gray', label='Daily Yield Change', alpha=0.4)
+    axes[1].plot(gm_std, color='darkred', label='Conditional Volatility')
+    
+    # plot conditional variance against rolling 30d variance
+    X_roll_vol = data.rolling(30).std()
+    axes[2].plot(gm_std, color=clrs[0], label='Conditional Volatility')
+    axes[2].plot(X_roll_vol, color=clrs[1], label='Actual Rolling 30D Volatility')
+    
+    # clean up
+    [ax.legend() for ax in axes]
+    
+    # save
+    f = 'Plots/model_results.png'
+    plt.gcf().savefig(f, dpi=600)
+    plt.close()
+    
+    return f
+    
+plot_model_results(result, X)
+plot_fs.append(f)
+
+# simulate forward returns ----------------------------------------------------
+
+def forecasting(model_result, n_days, start_date):
     # forecast
-    forecast = result.forecast(start=0, horizon=n_days, reindex=False,
-                               method='simulation')
+    forecast = model_result.forecast(start=0, horizon=n_days, reindex=False, method='simulation')
     paths = forecast.simulations.residual_variances[-1].T
     
     # generate plots
-    fig, ax = plt.subplots(1)
-    ax.plot(paths * 100, alpha=0.10, color=clrs[0])
-    ax.yaxis.set_major_formatter(mtick.PercentFormatter())
-    fig.suptitle('Simulated 10YT Volatility Paths')
-    ax.set_xlabel('Forecast Volatility Period (Days)')
-    ax.set_ylabel('Forecast Volatility (%)')
-    plt.gcf().savefig('simulation.png', dpi=600)
-    plt.clf()
+    clrs = sns.color_palette('deep')
+    fig, axes = plt.subplots(2)
     
-    # hedgehog plot
-    y = np.sqrt(forecast.residual_variance.dropna())['2017-12-31':] * 100
-    vol = result.conditional_volatility['2017-12-31':] * 100
+    # plot forecast volatility
+    axes[0].plot(paths * 100, alpha=0.10, color=clrs[0])
+    axes[0].yaxis.set_major_formatter(mtick.PercentFormatter())
+    axes[0].set_xlabel('Forecast Volatility Period (Days)')
+    axes[0].set_ylabel('Forecast Volatility (%)')
+    axes[0].set_title('Simulated 10YT Volatility Paths')
+
+    # make hedgehog plot
     
-    fig, ax = plt.subplots(1, figsize=(9,6))
-    ax.plot(vol, color=clrs[0], alpha=0.5, label='Estimated Conditional Volatility')
+    # residual variance and conditional volatility
+    y = np.sqrt(forecast.residual_variance.dropna())[start_date:] * 100
+    vol = model_result.conditional_volatility[start_date:] * 100
+    
+    # add to plot; only add label for first line
+    axes[1].plot(vol, color=clrs[0], alpha=0.5, label='Est. Conditional Volatility')
     for i in range(0, len(vol) - n_days, n_days):
         f = y.iloc[i]
         loc = vol.index.get_loc(f.name)
         f.index = vol.index[(loc+1):(loc+n_days+1)]
         if i == 0:
-            ax.plot(f, color=clrs[1], label='Forecast Volatility Path')
+            axes[1].plot(f, color=clrs[1], label='Forecast Volatility Path')
         else:
-            ax.plot(f, color=clrs[1])
+            axes[1].plot(f, color=clrs[1])
     
     # clean up
-    ax.legend(loc='upper left')
-    fig.suptitle('Estimated Conditional Volatility vs. 30D Forecast Volatility Paths')
-    ax.yaxis.set_major_formatter(mtick.PercentFormatter())
+    [ax.legend(loc='upper left') for ax in axes]
+    axes[1].set_title('Estimated Conditional Volatility vs. 30D Forecast Volatility Paths')
+    axes[1].yaxis.set_major_formatter(mtick.PercentFormatter())
     
+    # save
+    f = 'Plots/simulation.png'
+    plt.gcf().savefig(f, dpi=600)
+    plt.close()
     
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    return f
+    
+n_periods = 10
+start_dt = '2018-12-31'
+f = forecasting(result, n_periods, start_dt)
+plot_fs.append(f)
