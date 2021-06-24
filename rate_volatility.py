@@ -34,7 +34,7 @@ else:
 plot_fs = []
 
 # load in data
-data = rvf.load_rates_data(False)
+data = rvf.load_rates_data(True)
 rates = data['data']
 labels = data['labels']
 label_vals = {k: v for k, v in zip(labels, rates.columns)}
