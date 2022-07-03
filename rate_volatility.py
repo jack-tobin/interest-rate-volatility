@@ -14,13 +14,6 @@ import datetime as dt
 from arch import arch_model
 import quandl
 
-
-# local location
-local_dir = os.path.expanduser('~/Documents/projects/rate_volatility')
-os.chdir(local_dir)
-
-# load in module with required functions
-
 # load in authenticate quandl code; authenticate
 quandl = authenticate_quandl(quandl)
 
@@ -38,6 +31,9 @@ data = rvf.load_rates_data(True)
 rates = data['data']
 labels = data['labels']
 label_vals = {k: v for k, v in zip(labels, rates.columns)}
+
+# adjust issue with rates in 2017
+rates.loc[dt.datetime(2017, 4, 14), :] = rates.loc[dt.datetime(2017, 4, 13), :]
 
 ####
 # make basic plots of current yield curve, curve over time, and historical
@@ -63,22 +59,11 @@ for t in ['3 MO', '2 YR', '10 YR', '30 YR']:
     plot_fs.append(f)
 
 ####
-# determine degree of mean reverseion present in the series using Hurst exp.
-####
-
-# hurst
-t10 = rate_dfs['10 YR']
-rvf.hurst(t10['10 YR'].values)
-rvf.hurst(t10['Diff'].dropna().values)
-rvf.hurst(t10['LogDiff'].dropna().values)
-
-# > 10Y Yield Hurst is close to 0, suggesting a mean reverting series. Nice!
-
-####
 # make plot of changes in yield and serial correlation over time
 ####
 
 # create standardized version of log diffs
+t10 = rate_dfs['10 YR']
 subset = t10['LogDiff'].dropna()
 standardized = subset.sub(subset.mean()) ** 2
 
@@ -94,9 +79,9 @@ plot_fs.append(f_sl)
 # apply garch model to the time series to forecast volatility
 ####
 
-# fit model, use garch model with skew-t distribution and 'shock' approach
+# fit GARCH(1,1) model with constant mean
 X = t10['Diff'].dropna()
-gm = arch_model(X, p=1, o=1, q=1, mean='zero', vol='GARCH', dist='skewt')
+gm = arch_model(X, p=1, q=1, mean='constant', vol='GARCH', dist='normal')
 result = gm.fit(update_freq=0, disp='off')
 result.summary()
 
